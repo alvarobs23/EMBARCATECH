@@ -1,0 +1,152 @@
+#include <stdio.h>
+#include "pico/stdlib.h"
+#include "hardware/i2c.h"
+#include <math.h>
+#include "pico/cyw43_arch.h"
+#include "lwip/netif.h"
+#include "lwip/sockets.h"
+#include "mqtt.h"
+
+// Definindo os pinos do I2C
+#define SDA_PIN 4
+#define SCL_PIN 5
+
+// Definindo o endereço I2C do ADXL345
+#define ADXL345_ADDR 0x53  // Endereço padrão do ADXL345
+
+// Configurações do ADXL345
+#define DATA_FORMAT 0x31
+#define POWER_CTL 0x2D
+#define X_AXIS_L 0x32
+#define Y_AXIS_L 0x34
+#define Z_AXIS_L 0x36
+
+// Configuração do MQTT
+#define MQTT_SERVER "192.168.18.8"
+#define MQTT_PORT 1883
+#define MQTT_TOPIC "sensor/vibracao"
+
+// Frequência de amostragem
+#define SAMPLING_FREQUENCY 1000  // Hz (intervalo de 1 ms)
+
+#define SAMPLES 1024
+
+double accelX[SAMPLES];
+double accelY[SAMPLES];
+double accelZ[SAMPLES];
+
+// Variáveis para a conexão MQTT
+mqtt_client_t* client;
+
+// Inicializa o I2C
+void init_i2c() {
+    i2c_init(i2c_default, 400 * 1000);  // Inicializa I2C com 400 kHz
+    gpio_set_function(SDA_PIN, GPIO_FUNC_I2C);
+    gpio_set_function(SCL_PIN, GPIO_FUNC_I2C);
+    gpio_pull_up(SDA_PIN);
+    gpio_pull_up(SCL_PIN);
+}
+
+// Função para inicializar o ADXL345
+void init_adxl345() {
+    uint8_t power_ctl = 0x08;  // Ativa o ADXL345
+    i2c_write_blocking(i2c_default, ADXL345_ADDR, &POWER_CTL, 1, false);
+    i2c_write_blocking(i2c_default, ADXL345_ADDR, &power_ctl, 1, false);
+
+    uint8_t data_format = 0x0B;  // Configura o ADXL345 para +/- 16g
+    i2c_write_blocking(i2c_default, ADXL345_ADDR, &DATA_FORMAT, 1, false);
+    i2c_write_blocking(i2c_default, ADXL345_ADDR, &data_format, 1, false);
+}
+
+// Função para ler os dados de aceleração do ADXL345
+void read_accel_data() {
+    uint8_t x_low, x_high, y_low, y_high, z_low, z_high;
+    
+    // Lê os dados dos três eixos
+    i2c_read_blocking(i2c_default, ADXL345_ADDR, &X_AXIS_L, 1, true);
+    i2c_read_blocking(i2c_default, ADXL345_ADDR, &x_low, 1, true);
+    i2c_read_blocking(i2c_default, ADXL345_ADDR, &x_high, 1, true);
+    
+    i2c_read_blocking(i2c_default, ADXL345_ADDR, &Y_AXIS_L, 1, true);
+    i2c_read_blocking(i2c_default, ADXL345_ADDR, &y_low, 1, true);
+    i2c_read_blocking(i2c_default, ADXL345_ADDR, &y_high, 1, true);
+    
+    i2c_read_blocking(i2c_default, ADXL345_ADDR, &Z_AXIS_L, 1, true);
+    i2c_read_blocking(i2c_default, ADXL345_ADDR, &z_low, 1, true);
+    i2c_read_blocking(i2c_default, ADXL345_ADDR, &z_high, 1, true);
+    
+    // Combina os bytes de cada eixo (low e high)
+    int16_t x_val = (x_high << 8) | x_low;
+    int16_t y_val = (y_high << 8) | y_low;
+    int16_t z_val = (z_high << 8) | z_low;
+    
+    // Converte para g
+    accelX[i] = (double)x_val / 256.0;
+    accelY[i] = (double)y_val / 256.0;
+    accelZ[i] = (double)z_val / 256.0;
+}
+
+// Calcular RMS da aceleração
+double calculate_rms(double* data) {
+    double sum = 0.0;
+    for (int i = 0; i < SAMPLES; i++) {
+        sum += data[i] * data[i];
+    }
+    return sqrt(sum / SAMPLES);
+}
+
+// Função de callback para quando a mensagem for enviada
+void message_callback(mqtt_client_t* client, const mqtt_message_t* message, void* data) {
+    printf("Mensagem recebida: %.*s\n", message->payloadlen, (char*)message->payload);
+}
+
+// Função para conectar ao MQTT Broker
+void connect_mqtt() {
+    mqtt_client_init(client, MQTT_SERVER, MQTT_PORT, message_callback, NULL);
+    mqtt_client_connect(client);
+}
+
+// Função para publicar dados via MQTT
+void publish_data(double rmsX, double rmsY, double rmsZ) {
+    char message[256];
+    snprintf(message, sizeof(message), "RMS_X: %.2f, RMS_Y: %.2f, RMS_Z: %.2f", rmsX, rmsY, rmsZ);
+    mqtt_client_publish(client, MQTT_TOPIC, message, strlen(message), MQTT_QOS_1, false);
+}
+
+int main() {
+    stdio_init_all();
+
+    // Inicializa o Wi-Fi e o I2C
+    if (cyw43_arch_init()) {
+        printf("Falha ao inicializar Wi-Fi.\n");
+        return -1;
+    }
+
+    init_i2c();
+    init_adxl345();
+
+    printf("Conectando ao MQTT...\n");
+    connect_mqtt();  // Conecta ao broker MQTT
+
+    while (1) {
+        // Coleta dados de aceleração
+        for (int i = 0; i < SAMPLES; i++) {
+            read_accel_data();  // Lê os dados de aceleração
+            sleep_ms(1);  // Aguarda 1ms (1000Hz de frequência de amostragem)
+        }
+
+        // Calculando o RMS para cada eixo
+        double rmsX = calculate_rms(accelX);
+        double rmsY = calculate_rms(accelY);
+        double rmsZ = calculate_rms(accelZ);
+
+        // Publica os dados via MQTT
+        publish_data(rmsX, rmsY, rmsZ);
+
+        printf("RMS_X: %.2f, RMS_Y: %.2f, RMS_Z: %.2f\n", rmsX, rmsY, rmsZ);
+
+        sleep_ms(1000);  // Envia a cada 1 segundo
+    }
+
+    return 0;
+}
