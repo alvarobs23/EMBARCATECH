@@ -1,0 +1,144 @@
+#include <stdio.h>
+#include <math.h>
+#include "pico/stdlib.h"
+#include "hardware/i2c.h"
+#include "hardware/adc.h"
+#include <pico-ssd1306/ssd1306.h>
+#include <string.h>
+
+#define I2C_PORT i2c1
+#define SDA_PIN 14
+#define SCL_PIN 15
+#define ADXL345_ADDRESS 0x53
+#define NUM_SAMPLES 100
+#define G_TO_MM_S2 9806.65
+#define FREQ_HZ 400
+#define CONVERSION_FACTOR (1 / (2 * M_PI * FREQ_HZ))
+#define X_AXIS_PIN 26
+#define Y_AXIS_PIN 27
+#define BUTTON_PIN 22
+
+typedef enum { MENU_POWER, MENU_BASE, DIAGNOSTIC } state_t;
+typedef enum { NORMAL, DESBALANCEADO, DESALINHADO } diagnostico_t;
+
+state_t current_state = MENU_POWER;
+int motor_class = 0;
+int base_type = 0;
+
+void init_peripherals() {
+    stdio_init_all();
+    i2c_init(I2C_PORT, 400 * 1000);
+    gpio_set_function(SDA_PIN, GPIO_FUNC_I2C);
+    gpio_set_function(SCL_PIN, GPIO_FUNC_I2C);
+    gpio_pull_up(SDA_PIN);
+    gpio_pull_up(SCL_PIN);
+    adc_init();
+    adc_gpio_init(X_AXIS_PIN);
+    adc_gpio_init(Y_AXIS_PIN);
+    gpio_init(BUTTON_PIN);
+    gpio_set_dir(BUTTON_PIN, GPIO_IN);
+    gpio_pull_up(BUTTON_PIN);
+}
+
+int read_joystick() {
+    adc_select_input(X_AXIS_PIN - 26);
+    int x_value = adc_read();
+    adc_select_input(Y_AXIS_PIN - 26);
+    int y_value = adc_read();
+    int button_value = gpio_get(BUTTON_PIN);
+    
+    printf("Botao: %d\n", button_value);
+    
+    if (x_value > 3000) return 1;
+    if (x_value < 1000) return -1;
+    if (button_value == 0) {
+        sleep_ms(50); // Debounce
+        if (gpio_get(BUTTON_PIN) == 0) return 2;
+    }
+    return 0;
+}
+
+diagnostico_t determinar_diagnostico(float vel_rms) {
+    if (motor_class == 0) {
+        if (base_type == 0) {
+            if (vel_rms < 2.3) return NORMAL;
+            else if (vel_rms < 4.5) return DESBALANCEADO;
+            else return DESALINHADO;
+        } else {
+            if (vel_rms < 1.8) return NORMAL;
+            else if (vel_rms < 3.5) return DESBALANCEADO;
+            else return DESALINHADO;
+        }
+    } else {
+        if (base_type == 0) {
+            if (vel_rms < 2.8) return NORMAL;
+            else if (vel_rms < 5.0) return DESBALANCEADO;
+            else return DESALINHADO;
+        } else {
+            if (vel_rms < 2.3) return NORMAL;
+            else if (vel_rms < 4.0) return DESBALANCEADO;
+            else return DESALINHADO;
+        }
+    }
+}
+
+void realizar_diagnostico(ssd1306_t *disp) {
+    float rms_value = 3.0;
+    diagnostico_t diag = determinar_diagnostico(rms_value);
+    ssd1306_clear(disp);
+    char buffer[32];
+    sprintf(buffer, "RMS: %.2f mm/s", rms_value);
+    ssd1306_draw_string(disp, 0, 0, 1, buffer);
+    
+    switch (diag) {
+        case NORMAL:
+            ssd1306_draw_string(disp, 0, 10, 1, "Estado: Normal");
+            break;
+        case DESBALANCEADO:
+            ssd1306_draw_string(disp, 0, 10, 1, "Estado: Desbalanceado");
+            break;
+        case DESALINHADO:
+            ssd1306_draw_string(disp, 0, 10, 1, "Estado: Desalinhado");
+            break;
+    }
+    ssd1306_show(disp);
+}
+
+void draw_menu(ssd1306_t *disp) {
+    ssd1306_clear(disp);
+    if (current_state == MENU_POWER) {
+        ssd1306_draw_string(disp, 0, 0, 1, "Escolha a Potencia:");
+        ssd1306_draw_string(disp, 0, 10, 1, motor_class == 0 ? "> Ate 20CV" : "  Ate 20CV");
+        ssd1306_draw_string(disp, 0, 20, 1, motor_class == 1 ? "> Mais 20CV" : "  Mais 20CV");
+    } else if (current_state == MENU_BASE) {
+        ssd1306_draw_string(disp, 0, 0, 1, "Escolha a Base:");
+        ssd1306_draw_string(disp, 0, 10, 1, base_type == 0 ? "> Rigida" : "  Rigida");
+        ssd1306_draw_string(disp, 0, 20, 1, base_type == 1 ? "> Flexivel" : "  Flexivel");
+    }
+    ssd1306_show(disp);
+}
+
+int main() {
+    init_peripherals();
+    ssd1306_t disp;
+    disp.external_vcc = false;
+    ssd1306_init(&disp, 128, 64, 0x3C, I2C_PORT);
+
+    while (1) {
+        int input = read_joystick();
+        if (current_state == MENU_POWER) {
+            if (input == 1 || input == -1) motor_class = !motor_class;
+            if (input == 2) current_state = MENU_BASE;
+        } else if (current_state == MENU_BASE) {
+            if (input == 1 || input == -1) base_type = !base_type;
+            if (input == 2) current_state = DIAGNOSTIC;
+        } else if (current_state == DIAGNOSTIC) {
+            realizar_diagnostico(&disp);
+            sleep_ms(5000);
+            current_state = MENU_POWER;
+        }
+        draw_menu(&disp);
+        sleep_ms(200);
+    }
+    return 0;
+}
