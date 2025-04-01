@@ -42,7 +42,7 @@
 #define NUM_SAMPLES SAMPLE_RATE
 
 // Offset fixo para a aceleração da gravidade no eixo Z
-#define GRAVITY_OFFSET_Z 1.0f
+#define GRAVITY_OFFSET_Z -1.0f
 
 // Variáveis globais para navegação e escolhas
 volatile uint8_t current_menu = 0; // 0: Menu principal (potência), 1: Menu de base, 2: Tela de diagnóstico
