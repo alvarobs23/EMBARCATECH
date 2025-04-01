@@ -54,7 +54,7 @@ const uint32_t debounce_delay = 200;   // 200 ms
 int motor_power_class = 0; // 0: Baixa potência, 1: Média potência, 2: Alta potência
 int base_type = 0;         // 0: Flexível, 1: Rígida
 
-// Variável para armazenar o valor RMS de velocidade
+// Variável para armazenar o valor RMS total de velocidade
 volatile float rms_velocity = 0.0f;
 
 // Buffer para leitura do sensor
@@ -127,10 +127,8 @@ uint16_t read_joystick_adc(uint8_t channel) {
 
 // Função que realiza o diagnóstico RMS de acordo com a norma 20816.
 // Os limiares abaixo são exemplos e dependem da classificação do motor e do tipo de base.
-// Os limites são definidos para cada caso: [Baixa, Média, Alta] potência e para cada base: [Flexível, Rígida].
 const char *diagnostico_rms(void) {
     // Definição dos limiares (em mm/s) para cada classe e tipo de base
-    // Valores exemplares: { {Flexível, Rígida}, ... }
     float thresholds[3][2] = {
         {2.8f, 4.5f},  // Baixa potência
         {4.5f, 6.5f},  // Média potência
@@ -138,10 +136,6 @@ const char *diagnostico_rms(void) {
     };
     float limite = thresholds[motor_power_class][base_type];
     
-    // Critérios diagnósticos:
-    // Se o valor RMS estiver abaixo ou igual ao limite, condição normal;
-    // Se estiver entre o limite e 20% acima, alerta;
-    // Se exceder 20% do limite, condição crítica.
     if (rms_velocity <= limite) {
         return "Condicao Normal";
     } else if (rms_velocity <= limite * 1.2f) {
@@ -157,7 +151,6 @@ void update_oled_menu() {
     char buffer[32];
 
     if (current_menu == 0) {
-        // Menu principal: Classificação por potência do motor
         ssd1306_draw_string(&oled_display, 0, 0, 1, "Classif. por Potencia");
         sprintf(buffer, "1) Baixa Potencia%s", (menu_selection==0)?" <-": "");
         ssd1306_draw_string(&oled_display, 0, 12, 1, buffer);
@@ -166,15 +159,14 @@ void update_oled_menu() {
         sprintf(buffer, "3) Alta Potencia%s", (menu_selection==2)?" <-": "");
         ssd1306_draw_string(&oled_display, 0, 36, 1, buffer);
     } else if (current_menu == 1) {
-        // Menu de base: Motor em base Flexível ou Rígida
         ssd1306_draw_string(&oled_display, 0, 0, 1, "Tipo de Base:");
         sprintf(buffer, "1) Flexivel%s", (menu_selection==0)?" <-": "");
         ssd1306_draw_string(&oled_display, 0, 12, 1, buffer);
         sprintf(buffer, "2) Rigida%s", (menu_selection==1)?" <-": "");
         ssd1306_draw_string(&oled_display, 0, 24, 1, buffer);
     } else if (current_menu == 2) {
-        // Tela de diagnóstico: exibe o valor RMS e o diagnóstico
-        sprintf(buffer, "RMS: %.3f mm/s", rms_velocity);
+        // Exibe o valor RMS total
+        sprintf(buffer, "RMS Total: %.3f mm/s", rms_velocity);
         ssd1306_draw_string(&oled_display, 0, 0, 1, buffer);
         const char *diag = diagnostico_rms();
         ssd1306_draw_string(&oled_display, 0, 12, 1, diag);
@@ -183,29 +175,53 @@ void update_oled_menu() {
 }
 
 // Função para processar os dados do sensor, convertendo aceleração em velocidade
-// e calculando o RMS das amostras de velocidade.
+// e calculando o RMS das amostras de velocidade para os três eixos.
 void process_sensor_data() {
-    // Vetor estático para armazenar NUM_SAMPLES amostras de velocidade (em mm/s)
-    static float vel_samples[NUM_SAMPLES];
+    // Vetores estáticos para armazenar NUM_SAMPLES amostras de velocidade (em mm/s) para cada eixo
+    static float vel_samples_x[NUM_SAMPLES];
+    static float vel_samples_y[NUM_SAMPLES];
+    static float vel_samples_z[NUM_SAMPLES];
     static int sample_index = 0;
+    
     float ax, ay, az;
     adxl345_read(&ax, &ay, &az);
-    // Corrige o valor de aceleração no eixo Z subtraindo o offset (gravidade)
+    
+    // Para o eixo Z, aplica a compensação da gravidade
     float az_corr = az - GRAVITY_OFFSET_Z;
-    // Calcula a velocidade (em mm/s) para essa amostra
-    float vel_sample = az_corr * G_TO_MM_S2 * CONVERSION_FACTOR;
-    vel_samples[sample_index++] = vel_sample;
-
+    
+    // Calcula a velocidade (em mm/s) para cada eixo
+    float vel_sample_x = ax * G_TO_MM_S2 * CONVERSION_FACTOR;
+    float vel_sample_y = ay * G_TO_MM_S2 * CONVERSION_FACTOR;
+    float vel_sample_z = az_corr * G_TO_MM_S2 * CONVERSION_FACTOR;
+    
+    vel_samples_x[sample_index] = vel_sample_x;
+    vel_samples_y[sample_index] = vel_sample_y;
+    vel_samples_z[sample_index] = vel_sample_z;
+    
+    sample_index++;
+    
     // Se já coletamos NUM_SAMPLES amostras (1 segundo de dados), calcula o RMS
     if (sample_index >= NUM_SAMPLES) {
-        float sum_sq = 0.0f;
+        float sum_sq_x = 0.0f, sum_sq_y = 0.0f, sum_sq_z = 0.0f;
         for (int i = 0; i < NUM_SAMPLES; i++) {
-            sum_sq += vel_samples[i] * vel_samples[i];
+            sum_sq_x += vel_samples_x[i] * vel_samples_x[i];
+            sum_sq_y += vel_samples_y[i] * vel_samples_y[i];
+            sum_sq_z += vel_samples_z[i] * vel_samples_z[i];
         }
-        rms_velocity = sqrtf(sum_sq / NUM_SAMPLES);
+        float rms_x = sqrtf(sum_sq_x / NUM_SAMPLES);
+        float rms_y = sqrtf(sum_sq_y / NUM_SAMPLES);
+        float rms_z = sqrtf(sum_sq_z / NUM_SAMPLES);
+        // Calcula o RMS total como a raiz quadrada da média dos quadrados dos três eixos
+        float rms_total = sqrtf((sum_sq_x + sum_sq_y + sum_sq_z) / NUM_SAMPLES);
+        
+        rms_velocity = rms_total;
+        
         // Imprime os dados para depuração
-        printf("Acel: X=%.3f g, Y=%.3f g, Z=%.3f g | RMS=%.3f mm/s\n", ax, ay, az, rms_velocity);
+        printf("Acel: X=%.3f g, Y=%.3f g, Z=%.3f g | RMS: Total=%.3f mm/s (X=%.3f, Y=%.3f, Z=%.3f)\n", 
+            ax, ay, az, rms_total, rms_x, rms_y, rms_z);
+        
         sample_index = 0;
+        
         // Atualiza o display se estiver na tela de diagnóstico
         if (current_menu == 2) {
             update_oled_menu();
@@ -302,13 +318,10 @@ int main() {
             if (check_joystick_button()) {
                 printf("Opcao selecionada: %d no menu %d\n", menu_selection, current_menu);
                 if (current_menu == 0) {
-                    // Armazena a classificação do motor
                     motor_power_class = menu_selection;
                 } else if (current_menu == 1) {
-                    // Armazena o tipo de base
                     base_type = menu_selection;
                 }
-                // Avança para o próximo menu
                 current_menu++;
                 menu_selection = 0;
                 update_oled_menu();
