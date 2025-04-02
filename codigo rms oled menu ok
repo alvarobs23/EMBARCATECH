@@ -45,13 +45,13 @@
 #define GRAVITY_OFFSET_Z -1.0f
 
 // Variáveis globais para navegação e escolhas
-volatile uint8_t current_menu = 0; // 0: Menu principal (potência), 1: Menu de base, 2: Tela de diagnóstico
-volatile uint8_t menu_selection = 0; // Opção selecionada no menu
-uint32_t last_joystick_time = 0;       // Para debounce da navegação
-const uint32_t debounce_delay = 200;   // 200 ms
+volatile uint8_t current_menu = 0; // 0: Menu principal, 1: Seleção de base, 2: Tela de diagnóstico
+volatile uint8_t menu_selection = 0;
+uint32_t last_joystick_time = 0;
+const uint32_t debounce_delay = 200; // 200 ms
 
-// Variáveis para armazenar as escolhas do usuário
-int motor_power_class = 0; // 0: Baixa potência, 1: Média potência, 2: Alta potência
+// Escolhas do usuário
+int motor_power_class = 0; // 0: Baixa, 1: Média, 2: Alta potência
 int base_type = 0;         // 0: Flexível, 1: Rígida
 
 // Variável para armazenar o valor RMS total de velocidade
@@ -68,30 +68,26 @@ ssd1306_t oled_display;
 // Protótipos
 const char *diagnostico_rms(void);
 
-// Funções para inicialização do ADXL345
+// Inicializa o ADXL345
 bool adxl345_init() {
     uint8_t data;
-    // Verifica o device ID
     if (i2c_read_blocking(ADXL345_I2C, ADXL345_ADDR, &data, 1, false) != 1) {
         printf("Falha ao ler o device ID do ADXL345\n");
         return false;
     }
     printf("Device ID ADXL345: 0x%02x\n", data);
 
-    // Ativa medição: POWER_CTL -> 0x08
-    data = 0x08;
+    data = 0x08; // Ativa medição
     if (i2c_write_blocking(ADXL345_I2C, ADXL345_ADDR, (uint8_t[]){ADXL345_REG_POWER_CTL, data}, 2, false) != 2) {
         printf("Falha ao configurar POWER_CTL\n");
         return false;
     }
-    // Configura DATA_FORMAT: full resolution, ±2g (0x08)
-    data = 0x08;
+    data = 0x08; // Full resolution, ±2g
     if (i2c_write_blocking(ADXL345_I2C, ADXL345_ADDR, (uint8_t[]){ADXL345_REG_DATA_FORMAT, data}, 2, false) != 2) {
         printf("Falha ao configurar DATA_FORMAT\n");
         return false;
     }
-    // Configura taxa de dados (ex.: 800Hz – valor 0x0D)
-    data = 0x0D;
+    data = 0x0D; // Taxa de dados (ex.: 800Hz)
     if (i2c_write_blocking(ADXL345_I2C, ADXL345_ADDR, (uint8_t[]){ADXL345_REG_BW_RATE, data}, 2, false) != 2) {
         printf("Falha ao configurar BW_RATE\n");
         return false;
@@ -100,7 +96,7 @@ bool adxl345_init() {
     return true;
 }
 
-// Função para ler os dados de aceleração (X, Y, Z) em "g"
+// Lê acelerações (X, Y, Z) em "g"
 void adxl345_read(float *ax, float *ay, float *az) {
     if (i2c_write_blocking(ADXL345_I2C, ADXL345_ADDR, (uint8_t[]){ADXL345_REG_DATAX0}, 1, true) != 1) {
         printf("Erro ao solicitar leitura dos dados do sensor.\n");
@@ -119,20 +115,18 @@ void adxl345_read(float *ax, float *ay, float *az) {
     *az = raw_z * 0.0039f;
 }
 
-// Função para ler o joystick via ADC (retorna valor de 0 a 4095)
+// Lê o ADC do canal especificado
 uint16_t read_joystick_adc(uint8_t channel) {
     adc_select_input(channel);
     return adc_read();
 }
 
-// Função que realiza o diagnóstico RMS de acordo com a norma 20816.
-// Os limiares abaixo são exemplos e dependem da classificação do motor e do tipo de base.
+// Diagnóstico baseado nos valores RMS
 const char *diagnostico_rms(void) {
-    // Definição dos limiares (em mm/s) para cada classe e tipo de base
     float thresholds[3][2] = {
-        {2.8f, 4.5f},  // Baixa potência
-        {4.5f, 6.5f},  // Média potência
-        {6.5f, 8.5f}   // Alta potência
+        {2.8f, 4.5f},  
+        {4.5f, 6.5f},  
+        {6.5f, 8.5f}   
     };
     float limite = thresholds[motor_power_class][base_type];
     
@@ -145,7 +139,7 @@ const char *diagnostico_rms(void) {
     }
 }
 
-// Atualiza o display OLED de acordo com o menu e a opção selecionada
+// Atualiza o display OLED de acordo com o menu atual
 void update_oled_menu() {
     ssd1306_clear(&oled_display);
     char buffer[32];
@@ -165,19 +159,17 @@ void update_oled_menu() {
         sprintf(buffer, "2) Rigida%s", (menu_selection==1)?" <-": "");
         ssd1306_draw_string(&oled_display, 0, 24, 1, buffer);
     } else if (current_menu == 2) {
-        // Exibe o valor RMS total
         sprintf(buffer, "RMS Total: %.3f mm/s", rms_velocity);
         ssd1306_draw_string(&oled_display, 0, 0, 1, buffer);
         const char *diag = diagnostico_rms();
         ssd1306_draw_string(&oled_display, 0, 12, 1, diag);
+        ssd1306_draw_string(&oled_display, 0, 36, 1, "Pressione Botao p/ Menu");
     }
     ssd1306_show(&oled_display);
 }
 
-// Função para processar os dados do sensor, convertendo aceleração em velocidade
-// e calculando o RMS das amostras de velocidade para os três eixos.
+// Processa os dados do sensor e calcula o RMS dos três eixos
 void process_sensor_data() {
-    // Vetores estáticos para armazenar NUM_SAMPLES amostras de velocidade (em mm/s) para cada eixo
     static float vel_samples_x[NUM_SAMPLES];
     static float vel_samples_y[NUM_SAMPLES];
     static float vel_samples_z[NUM_SAMPLES];
@@ -186,10 +178,9 @@ void process_sensor_data() {
     float ax, ay, az;
     adxl345_read(&ax, &ay, &az);
     
-    // Para o eixo Z, aplica a compensação da gravidade
+    // Aplica compensação da gravidade apenas no eixo Z
     float az_corr = az - GRAVITY_OFFSET_Z;
     
-    // Calcula a velocidade (em mm/s) para cada eixo
     float vel_sample_x = ax * G_TO_MM_S2 * CONVERSION_FACTOR;
     float vel_sample_y = ay * G_TO_MM_S2 * CONVERSION_FACTOR;
     float vel_sample_z = az_corr * G_TO_MM_S2 * CONVERSION_FACTOR;
@@ -200,7 +191,6 @@ void process_sensor_data() {
     
     sample_index++;
     
-    // Se já coletamos NUM_SAMPLES amostras (1 segundo de dados), calcula o RMS
     if (sample_index >= NUM_SAMPLES) {
         float sum_sq_x = 0.0f, sum_sq_y = 0.0f, sum_sq_z = 0.0f;
         for (int i = 0; i < NUM_SAMPLES; i++) {
@@ -208,21 +198,12 @@ void process_sensor_data() {
             sum_sq_y += vel_samples_y[i] * vel_samples_y[i];
             sum_sq_z += vel_samples_z[i] * vel_samples_z[i];
         }
-        float rms_x = sqrtf(sum_sq_x / NUM_SAMPLES);
-        float rms_y = sqrtf(sum_sq_y / NUM_SAMPLES);
-        float rms_z = sqrtf(sum_sq_z / NUM_SAMPLES);
-        // Calcula o RMS total como a raiz quadrada da média dos quadrados dos três eixos
         float rms_total = sqrtf((sum_sq_x + sum_sq_y + sum_sq_z) / NUM_SAMPLES);
-        
         rms_velocity = rms_total;
         
-        // Imprime os dados para depuração
-        printf("Acel: X=%.3f g, Y=%.3f g, Z=%.3f g | RMS: Total=%.3f mm/s (X=%.3f, Y=%.3f, Z=%.3f)\n", 
-            ax, ay, az, rms_total, rms_x, rms_y, rms_z);
+        printf("Acel: X=%.3f g, Y=%.3f g, Z=%.3f g | RMS Total=%.3f mm/s\n", ax, ay, az, rms_total);
         
         sample_index = 0;
-        
-        // Atualiza o display se estiver na tela de diagnóstico
         if (current_menu == 2) {
             update_oled_menu();
         }
@@ -243,43 +224,54 @@ bool oled_init() {
     return true;
 }
 
-// Atualiza o menu com base na navegação via joystick
+// Atualiza a navegação dos menus
 void update_menu_navigation() {
     uint32_t now = to_ms_since_boot(get_absolute_time());
     if (now - last_joystick_time < debounce_delay) return;
 
-    uint16_t adc_y = read_joystick_adc(1);
+    // Tenta usar o eixo X para navegação vertical, se o Y estiver trocado
+    uint16_t adc_val = read_joystick_adc(0); // usando canal 0
     uint8_t max_option = (current_menu == 0) ? 2 : (current_menu == 1) ? 1 : 0;
 
-    if (adc_y < 1000 && menu_selection > 0) {
+    // Ajuste os limiares conforme a resposta do ADC
+    if (adc_val > 3000 && menu_selection > 0) {
         menu_selection--;
         last_joystick_time = now;
         update_oled_menu();
-    } else if (adc_y > 3000 && menu_selection < max_option) {
+    } else if (adc_val < 1000 && menu_selection < max_option) {
         menu_selection++;
         last_joystick_time = now;
         update_oled_menu();
     }
 }
 
-// Verifica se o botão do joystick foi pressionado para confirmar a opção
+
+// Verifica o botão do joystick (lógica invertida: ativo em nível alto)
+// Função revisada para verificar o botão do joystick com debounce e espera pelo release
 bool check_joystick_button() {
     static uint32_t last_btn_time = 0;
     uint32_t now = to_ms_since_boot(get_absolute_time());
+    // Verifica o debounce
     if (now - last_btn_time < debounce_delay) return false;
 
+    // Se o botão está pressionado (ativo em nível baixo)
     if (gpio_get(JOYSTICK_BTN_PIN) == 0) {
+        // Aguarda o botão ser liberado para evitar múltiplos acionamentos
+        while (gpio_get(JOYSTICK_BTN_PIN) == 0) {
+            tight_loop_contents();
+        }
         last_btn_time = now;
         return true;
     }
     return false;
 }
 
+
 int main() {
     stdio_init_all();
     printf("Iniciando o sistema...\n");
 
-    // Inicializa I2C para ADXL345
+    // Inicializa I2C para o ADXL345
     i2c_init(ADXL345_I2C, 400 * 1000);
     gpio_set_function(ADXL345_SDA_PIN, GPIO_FUNC_I2C);
     gpio_set_function(ADXL345_SCL_PIN, GPIO_FUNC_I2C);
@@ -306,13 +298,13 @@ int main() {
         return 1;
     }
 
-    // Exibe o menu inicial (menu principal: classificação por potência)
+    // Exibe o menu inicial
     update_oled_menu();
 
     absolute_time_t next_sample_time = make_timeout_time_ms(1);
 
     while (true) {
-        // Navegação dos menus para seleção de potência e tipo de base
+        // Menus 0 e 1 para seleção
         if (current_menu == 0 || current_menu == 1) {
             update_menu_navigation();
             if (check_joystick_button()) {
@@ -327,9 +319,15 @@ int main() {
                 update_oled_menu();
             }
         }
-        // Na tela de diagnóstico, processa os dados do sensor continuamente
+        // Na tela de diagnóstico
         if (current_menu == 2) {
             process_sensor_data();
+            // Se o botão for pressionado, retorna ao menu principal
+            if (check_joystick_button()) {
+                current_menu = 0;
+                menu_selection = 0;
+                update_oled_menu();
+            }
         }
         busy_wait_until(next_sample_time);
         next_sample_time = delayed_by_ms(next_sample_time, 1);
