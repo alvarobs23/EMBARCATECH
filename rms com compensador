@@ -36,7 +36,7 @@
 
 // Fatores de conversão e integração
 #define G_TO_MM_S2 9806.65f
-#define CONVERSION_FACTOR (1.0f / (2.0f * M_PI * SAMPLE_RATE))
+#define CONVERSION_FACTOR (1.0f / SAMPLE_RATE)
 
 // Número de amostras para cálculo do RMS (1 segundo de dados)
 #define NUM_SAMPLES SAMPLE_RATE
@@ -139,9 +139,9 @@ const char *diagnostico_rms(void) {
     if (rms_velocity <= limite) {
         return "Condicao: Normal";
     } else if (rms_velocity <= limite * 1.2f) {
-        return "Alerta: Vibracao acima do normal";
+        return "Condicao: Alerta";
     } else {
-        return "Critico: Manutencao Necessaria";
+        return "Condicao: Critica";
     }
 }
 
@@ -152,11 +152,11 @@ void update_oled_menu() {
 
     if (current_menu == 0) {
         ssd1306_draw_string(&oled_display, 0, 0, 1, "Classif. por Potencia");
-        sprintf(buffer, "1) Baixa Potencia%s", (menu_selection==0)?" <-": "");
+        sprintf(buffer, "1) Ate 20 CV%s", (menu_selection==0)?" <-": "");
         ssd1306_draw_string(&oled_display, 0, 12, 1, buffer);
-        sprintf(buffer, "2) Media Potencia%s", (menu_selection==1)?" <-": "");
+        sprintf(buffer, "2) 20 a 400 CV%s", (menu_selection==1)?" <-": "");
         ssd1306_draw_string(&oled_display, 0, 24, 1, buffer);
-        sprintf(buffer, "3) Alta Potencia%s", (menu_selection==2)?" <-": "");
+        sprintf(buffer, "3) Mais de 400 CV%s", (menu_selection==2)?" <-": "");
         ssd1306_draw_string(&oled_display, 0, 36, 1, buffer);
     } else if (current_menu == 1) {
         ssd1306_draw_string(&oled_display, 0, 0, 1, "Tipo de Base:");
