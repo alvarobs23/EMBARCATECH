@@ -6,11 +6,12 @@
 #include <pico-ssd1306/ssd1306.h>
 #include <string.h>
 
-// Definições de pinos e I2C
+// Definições de pinos sensor ADXL345 e I2C
 #define ADXL345_SDA_PIN 8
 #define ADXL345_SCL_PIN 9
 #define ADXL345_I2C i2c0
 
+// Definições de pinos sensor Display oled e I2C
 #define OLED_SDA_PIN 14
 #define OLED_SCL_PIN 15
 #define OLED_I2C i2c1
@@ -40,9 +41,6 @@
 
 // Número de amostras para cálculo do RMS (1 segundo de dados)
 #define NUM_SAMPLES SAMPLE_RATE
-
-// Offset fixo para a aceleração da gravidade no eixo Z (original)
-//#define GRAVITY_OFFSET_Z -1.0f
 
 // Offsets medidos para compensação (em g)
 #define OFFSET_X  0.0033f
@@ -127,23 +125,37 @@ uint16_t read_joystick_adc(uint8_t channel) {
     return adc_read();
 }
 
-// Diagnóstico baseado nos valores RMS
+
+// Diagnóstico baseado nos valores RMS com dois limites fixos (normal e alerta)
 const char *diagnostico_rms(void) {
-    float thresholds[3][2] = {
-        {2.8f, 4.5f},  
-        {4.5f, 6.5f},  
-        {6.5f, 8.5f}   
+    // thresholds[motor_power_class][base_type][0] = limite normal, [1] = limite de alerta
+    float thresholds[3][2][2] = {
+        {   // Motor até 20 CV
+            {3.0f, 4.0f},    // Base Flexível
+            {2.8f, 4.5f}     // Base Rígida
+        },
+        {   // Motor de 20 até 400 CV
+            {4.5f, 6.5f},    // Base Flexível
+            {4.0f, 6.0f}     // Base Rígida
+        },
+        {   // Motor acima de 400 CV
+            {6.5f, 8.5f},    // Base Flexível
+            {6.0f, 8.0f}     // Base Rígida
+        }
     };
-    float limite = thresholds[motor_power_class][base_type];
-    
-    if (rms_velocity <= limite) {
+
+    float normal_limit = thresholds[motor_power_class][base_type][0];
+    float alert_limit  = thresholds[motor_power_class][base_type][1];
+
+    if (rms_velocity <= normal_limit) {
         return "Condicao: Normal";
-    } else if (rms_velocity <= limite * 1.2f) {
+    } else if (rms_velocity <= alert_limit) {
         return "Condicao: Alerta";
     } else {
-        return "Condicao: Critica";
+        return "Condicao: Emergencial";
     }
 }
+
 
 // Atualiza o display OLED de acordo com o menu atual
 void update_oled_menu() {
@@ -231,36 +243,36 @@ bool oled_init() {
 
 // Atualiza a navegação dos menus
 void update_menu_navigation() {
-    uint32_t now = to_ms_since_boot(get_absolute_time());
-    if (now - last_joystick_time < debounce_delay) return;
+    uint32_t now = to_ms_since_boot(get_absolute_time()); // Converte o tempo em milissigundos
+    if (now - last_joystick_time < debounce_delay) return; // Verifica o tempo da ultima interação com o joystick
 
-    // Usa o ADC do eixo X para navegação vertical (se o Y estiver trocado)
-    uint16_t adc_val = read_joystick_adc(0); // canal 0
-    uint8_t max_option = (current_menu == 0) ? 2 : (current_menu == 1) ? 1 : 0;
+    // Usa o ADC do eixo Y para navegação vertical 
+    uint16_t adc_val = read_joystick_adc(0); // Variavel armazena o valor lido do ADC
+    uint8_t max_option = (current_menu == 0) ? 2 : (current_menu == 1) ? 1 : 0; // Define o numero maximo de opções por menu
 
     // Ajusta os limiares conforme a resposta do ADC
-    if (adc_val > 3000 && menu_selection > 0) {
-        menu_selection--;
-        last_joystick_time = now;
-        update_oled_menu();
-    } else if (adc_val < 1000 && menu_selection < max_option) {
-        menu_selection++;
-        last_joystick_time = now;
-        update_oled_menu();
+    if (adc_val > 3000 && menu_selection > 0) { // Verifica se o valor lido do ADC é maior que 3000
+        menu_selection--; // Decrementa a variável, move a seleção para a opção anterior.
+        last_joystick_time = now; //Atualiza a variável last_joystick_time para o tempo atual
+        update_oled_menu(); //atualiza o display OLED 
+    } else if (adc_val < 1000 && menu_selection < max_option) { // verifica se o valor do ADC é menor que 1000, Joystick na direção oposta
+        menu_selection++; //Incrementa a variável, movendo para a próxima opção do menu.
+        last_joystick_time = now; //Atualiza o tempo da última ação do joystick para o tempo atual.
+        update_oled_menu(); //Atualiza o display OLED 
     }
 }
 
 // Verifica o botão do joystick com debounce e espera pelo release
 bool check_joystick_button() {
     static uint32_t last_btn_time = 0;
-    uint32_t now = to_ms_since_boot(get_absolute_time());
-    if (now - last_btn_time < debounce_delay) return false;
+    uint32_t now = to_ms_since_boot(get_absolute_time());// representa o instante atual em milissegundos.
+    if (now - last_btn_time < debounce_delay) return false; // Verifica se o intervalo de tempo entre o momento atual  e o último momento em que o botão foi processado é menor que o valor definido em debounce_delay.
 
-    if (gpio_get(JOYSTICK_BTN_PIN) == 0) {
-        while (gpio_get(JOYSTICK_BTN_PIN) == 0) {
-            tight_loop_contents();
+    if (gpio_get(JOYSTICK_BTN_PIN) == 0) { // Lê o estado do botão
+        while (gpio_get(JOYSTICK_BTN_PIN) == 0) { // Espera o botão retornar 1 para considerar a ação
+            tight_loop_contents(); //função de espera 
         }
-        last_btn_time = now;
+        last_btn_time = now;// após o botão ser solta ele atualiza com tempo atual
         return true;
     }
     return false;
@@ -300,33 +312,33 @@ int main() {
     // Exibe o menu inicial
     update_oled_menu();
 
-    absolute_time_t next_sample_time = make_timeout_time_ms(1);
+    absolute_time_t next_sample_time = make_timeout_time_us(625);
 
-    while (true) {
-        if (current_menu == 0 || current_menu == 1) {
-            update_menu_navigation();
-            if (check_joystick_button()) {
+    while (true) { // loop principal 
+        if (current_menu == 0 || current_menu == 1) { // se estiver no menu 0 ou 1
+            update_menu_navigation(); //atualiza o oled conforme o joystick é movimentado
+            if (check_joystick_button()) { // se o botão for precionado
                 printf("Opcao selecionada: %d no menu %d\n", menu_selection, current_menu);
-                if (current_menu == 0) {
+                if (current_menu == 0) { // armazena a escolha do usuario
                     motor_power_class = menu_selection;
-                } else if (current_menu == 1) {
+                } else if (current_menu == 1) { // armazena a escolha do usuario
                     base_type = menu_selection;
                 }
-                current_menu++;
+                current_menu++; // Após selecionar ,passa para o proximo menu
                 menu_selection = 0;
                 update_oled_menu();
             }
         }
-        if (current_menu == 2) {
+        if (current_menu == 2) { //começa a coletar e processar dados do sensor.
             process_sensor_data();
-            if (check_joystick_button()) {
+            if (check_joystick_button()) { // se o botão for selecionado ele volta pra o menu 0
                 current_menu = 0;
                 menu_selection = 0;
                 update_oled_menu();
             }
         }
         busy_wait_until(next_sample_time);
-        next_sample_time = delayed_by_ms(next_sample_time, 1);
+        next_sample_time = delayed_by_us(next_sample_time, 625);
     }
 
     return 0;
