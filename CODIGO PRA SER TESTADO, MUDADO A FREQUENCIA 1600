@@ -1,9 +1,9 @@
 #include <stdio.h> 
-#include <math.h>
-#include "pico/stdlib.h"
+#include <math.h> // biblioteca pra funções matematicas
+#include "pico/stdlib.h" 
 #include "hardware/i2c.h"
 #include "hardware/adc.h"
-#include <pico-ssd1306/ssd1306.h>
+#include <pico-ssd1306/ssd1306.h> // biblioteca pra  o display oled
 #include <string.h>
 
 // Definições de pinos sensor ADXL345 e I2C
@@ -19,10 +19,10 @@
 // Endereço I2C do ADXL345
 #define ADXL345_ADDR 0x53
 
-// Registros do ADXL345
+// Endereço dos registradores internos do ADXL345
 #define ADXL345_REG_DEVID         0x00
-#define ADXL345_REG_POWER_CTL     0x2D
-#define ADXL345_REG_DATA_FORMAT   0x31
+#define ADXL345_REG_POWER_CTL     0x2D // Controle de energia
+#define ADXL345_REG_DATA_FORMAT   0x31 // Resolução
 #define ADXL345_REG_BW_RATE       0x2C
 #define ADXL345_REG_DATAX0        0x32
 
@@ -36,7 +36,7 @@
 #define SAMPLE_DT (1.0f / SAMPLE_RATE)
 
 // Fatores de conversão e integração
-#define G_TO_MM_S2 9806.65f
+#define G_TO_MM_S2 9806.65f // converte (g) para mm/s^2
 #define CONVERSION_FACTOR (1.0f / SAMPLE_RATE)
 
 // Número de amostras para cálculo do RMS (1 segundo de dados)
@@ -44,12 +44,12 @@
 
 // Offsets medidos para compensação (em g)
 #define OFFSET_X  0.0033f
-#define OFFSET_Y -0.0045f
-#define OFFSET_Z -1.0171f
+#define OFFSET_Y -0.0070f
+#define OFFSET_Z -1.0178f
 
 // Variáveis globais para navegação e escolhas
 volatile uint8_t current_menu = 0; // 0: Menu principal, 1: Seleção de base, 2: Tela de diagnóstico
-volatile uint8_t menu_selection = 0;
+volatile uint8_t menu_selection = 0; // opção selecionada
 uint32_t last_joystick_time = 0;
 const uint32_t debounce_delay = 200; // 200 ms
 
@@ -144,10 +144,10 @@ const char *diagnostico_rms(void) {
         }
     };
 
-    float normal_limit = thresholds[motor_power_class][base_type][0];
-    float alert_limit  = thresholds[motor_power_class][base_type][1];
+    float normal_limit = thresholds[motor_power_class][base_type][0]; // armazena o limite escolhido
+    float alert_limit  = thresholds[motor_power_class][base_type][1]; // armazena o limite escolhido
 
-    if (rms_velocity <= normal_limit) {
+    if (rms_velocity <= normal_limit) { // compara a rms_velocity com o limite
         return "Condicao: Normal";
     } else if (rms_velocity <= alert_limit) {
         return "Condicao: Alerta";
@@ -158,8 +158,8 @@ const char *diagnostico_rms(void) {
 
 
 // Atualiza o display OLED de acordo com o menu atual
-void update_oled_menu() {
-    ssd1306_clear(&oled_display);
+void update_oled_menu() { // atualiza o display
+    ssd1306_clear(&oled_display); // limpa o display
     char buffer[32];
 
     if (current_menu == 0) {
@@ -183,7 +183,7 @@ void update_oled_menu() {
         ssd1306_draw_string(&oled_display, 0, 12, 1, diag);
         ssd1306_draw_string(&oled_display, 0, 36, 1, "Aperte Botao p/ Menu");
     }
-    ssd1306_show(&oled_display);
+    ssd1306_show(&oled_display); //atualiza o display
 }
 
 // Processa os dados do sensor e calcula o RMS dos três eixos
@@ -196,8 +196,7 @@ void process_sensor_data() {
     float ax, ay, az;
     adxl345_read(&ax, &ay, &az);
     
-    // Neste exemplo, não há compensação adicional para gravidade,
-    // pois os offsets (inclusive de gravidade no eixo Z) já foram compensados.
+    // conversao da aceleração pra velocidade (mm/s)
     float vel_sample_x = ax * G_TO_MM_S2 * CONVERSION_FACTOR;
     float vel_sample_y = ay * G_TO_MM_S2 * CONVERSION_FACTOR;
     float vel_sample_z = az * G_TO_MM_S2 * CONVERSION_FACTOR;
@@ -208,7 +207,7 @@ void process_sensor_data() {
     
     sample_index++;
     
-    if (sample_index >= NUM_SAMPLES) {
+    if (sample_index >= NUM_SAMPLES) { // verifica se o numero de amostras atingiu o limite
         float sum_sq_x = 0.0f, sum_sq_y = 0.0f, sum_sq_z = 0.0f;
         for (int i = 0; i < NUM_SAMPLES; i++) {
             sum_sq_x += vel_samples_x[i] * vel_samples_x[i];
